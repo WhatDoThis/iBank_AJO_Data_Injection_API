@@ -1,85 +1,103 @@
-import time
-from datetime import datetime
 from django.core.management.base import BaseCommand
 from batch_api.models import Woo
+from datetime import datetime
+import time
 import requests
 
 
 class Command(BaseCommand):
-    help = '매일 자동으로 새 데이터 5개 생성 후 AEP로 전송'
+    help = 'Daily batch job - Create 5 records and send to AEP'
 
     def handle(self, *args, **options):
-        self.stdout.write('=' * 60)
-        self.stdout.write(self.style.SUCCESS('Daily Batch 시작'))
-        self.stdout.write('=' * 60)
+        print("=" * 60)
+        print("Daily Batch 시작")
+        print("=" * 60)
         
-        # 1. 마지막 ID 확인
-        last_woo = Woo.objects.order_by('-id').first()
-        start_id = (last_woo.id + 1) if last_woo else 1
+        # 마지막 ID 확인
+        last_record = Woo.objects.order_by('-id').first()
+        last_id = last_record.id if last_record else 0
+        start_id = last_id + 1
         
-        self.stdout.write(f'마지막 ID: {last_woo.id if last_woo else 0}')
-        self.stdout.write(f'시작 ID: {start_id}')
+        print(f"마지막 ID: {last_id}")
+        print(f"시작 ID: {start_id}")
         
-        # 2. 현재 시간 및 날짜
+        # 현재 시간
         now = datetime.now()
         current_timestamp = now.isoformat()
-        current_date = now.strftime('%y%m%d')  # yymmdd
+        current_date = now.strftime('%y%m%d')
         
-        self.stdout.write(f'현재 시간: {current_timestamp}')
-        self.stdout.write(f'현재 날짜: {current_date}')
+        print(f"현재 시간: {current_timestamp}")
+        print(f"현재 날짜: {current_date}")
         
-        # 3. 새 데이터 5개 생성
-        created_count = 0
+        # 기존 test 계정 개수 확인
+        test_count = Woo.objects.filter(email__startswith='test').count()
+        print(f"기존 test 계정: {test_count}개\n")
+        
+        # 5개 데이터 생성
         for i in range(5):
             new_id = start_id + i
+            ones_digit = new_id % 10
+            
+            # 일의 자리가 0 또는 5인 경우 (마지막 데이터)
+            if ones_digit == 0 or ones_digit == 5:
+                email = 'whi21@naver.com'
+                phone = '+821098714077'
+            else:
+                # test 계정 순차 증가
+                test_count += 1
+                email = f'test{test_count:05d}@gmail.com'
+                phone = f'+8211{test_count:08d}'  # E.164 형식
+            
             woo = Woo.objects.create(
-                email='whi21@naver.com',
-                phone='+821098714077',
+                email=email,
+                phone=phone,
                 name=f'woo{new_id}',
                 _id=f'woo{new_id}{current_date}',
                 createdby=current_timestamp,
-                modifiedby=current_timestamp
+                modifiedby=current_timestamp,
+                is_sent=False
             )
-            created_count += 1
-            self.stdout.write(
-                self.style.SUCCESS(f'✓ 생성: ID={woo.id}, name={woo.name}, _id={woo._id}')
-            )
+            
+            print(f"✓ 생성: ID={woo.id}, name={woo.name}, _id={woo._id}")
+            print(f"   email: {email}, phone: {phone}")
         
-        self.stdout.write(f'\n총 {created_count}개 데이터 생성 완료')
+        print(f"\n총 5개 데이터 생성 완료")
         
-        # 4. 5분 대기
-        self.stdout.write('\n5분 대기 중...')
-        for remaining in range(300, 0, -30):
-            mins, secs = divmod(remaining, 60)
-            self.stdout.write(f'  남은 시간: {mins:02d}:{secs:02d}', ending='\r')
-            time.sleep(30)
+        # 1분 대기
+        wait_time = 60
+        print(f'\n1분 대기 중...')
         
-        self.stdout.write('\n\n5분 대기 완료!')
+        start_time = time.time()
+        while time.time() - start_time < wait_time:
+            remaining = wait_time - (time.time() - start_time)
+            mins, secs = divmod(int(remaining), 60)
+            print(f'\r  남은 시간: {mins:02d}:{secs:02d}', end='', flush=True)
+            time.sleep(1)
         
-        # 5. API 호출하여 AEP로 전송
-        self.stdout.write('\nAEP로 데이터 전송 중...')
+        print(f'\n1분 대기 완료!')
+        
+        # AEP로 전송
+        print(f'\nAEP로 데이터 전송 중...')
         
         try:
             response = requests.post(
                 'http://127.0.0.1:8000/api/batch/run/',
-                timeout=60
+                timeout=300
             )
             
             if response.status_code == 200:
                 result = response.json()
-                self.stdout.write(self.style.SUCCESS('\n✓ 전송 성공!'))
-                self.stdout.write(f"  Batch ID: {result.get('batch_id')}")
-                self.stdout.write(f"  Total: {result.get('total_records')}")
-                self.stdout.write(f"  Success: {result.get('success_count')}")
-                self.stdout.write(f"  Failed: {result.get('fail_count')}")
+                print(f"✓ 전송 성공!")
+                print(f"  Batch ID: {result.get('batch_id')}")
+                print(f"  Total: {result.get('total_records')}")
+                print(f"  Success: {result.get('success_count')}")
+                print(f"  Failed: {result.get('fail_count')}")
             else:
-                self.stdout.write(
-                    self.style.ERROR(f'\n✗ 전송 실패: {response.status_code}')
-                )
-                self.stdout.write(response.text)
+                print(f"✗ 전송 실패: HTTP {response.status_code}")
+                
         except Exception as e:
-            self.stdout.write(self.style.ERROR(f'\n✗ 에러: {str(e)}'))
+            print(f"✗ 전송 에러: {e}")
         
-        self.stdout.write('\n' + '=' * 60)
-        self.stdout.write(self.style.SUCCESS('Daily Batch 완료'))
-        self.stdout.write('=' * 60)
+        print("=" * 60)
+        print("Daily Batch 완료")
+        print("=" * 60)
